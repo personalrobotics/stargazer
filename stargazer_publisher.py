@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 from stargazer import StarGazer
 
 import roslib
