@@ -17,7 +17,7 @@ log.addHandler(logging.NullHandler())
 
 MAP_FILE = 'marker_map.yaml'
 
-class StarGazer:
+class StarGazer(object):
     def __init__(self, 
                  device          = '/dev/ttyUSB0', 
                  marker_map      = None,
@@ -40,11 +40,8 @@ class StarGazer:
         callback_local: will be called whenever a new poses is recieved from the 
                         Stargazer, with a dict: {marker_id: [xyz, angle]}
         '''
-
-        # connect to device with pyserial, baudrate is from hagisonic manual
-        self.connection = Serial(port     = device, 
-                                 baudrate = 115200,
-                                 timeout  = 1.0)
+        self.device = device
+        self.marker_map = mar
 
         # chunk_size: how many charecters to read from the serial bus in
         # between checking the buffer for the STX/ETX charecters
@@ -73,6 +70,28 @@ class StarGazer:
         self._stopped = Event()
         self._thread  = Thread(target=self._read, args=()).start()
 
+    def __enter__(self):
+        self.connect()
+
+    def __exit__(self, type, value, traceback):
+        if self.connection:
+            self.disconnect()
+
+    def connect(self):
+        """ Connect to the Stargazer over the specified RS-232 port.
+        """
+        assert not self.connection
+
+        self.connection = Serial(port=device, baudrate=115200, timeout=1.0)
+
+    def disconnect(self):
+        """ Disconnects from the Stargazer and closes the RS-232 port.
+        """
+        assert self.connection
+
+        self.connection.close()
+        self.connection = None
+
     def _send_stargazer_startup(self):
         startup = ('CalcStop',
                    'MarkDim|HLD1L',
@@ -92,11 +111,12 @@ class StarGazer:
                  example: send_command('CalcStop')
                           send_command('MarkType', 'HLD1L')
         '''
-        time.sleep(1)
         delimeted   = ''.join([str(i) + self._DELIM for i in args])[:-1]
         command_str = self._STX + self._CMD + delimeted + self._ETX
         log.info('Sending command to StarGazer: %s', command_str)
         self.connection.write(command_str)
+
+    def set_parameter(
 
     def _read(self):
         '''
