@@ -1,10 +1,7 @@
 #!/usr/bin/env python
-from stargazer import StarGazer
-
-import roslib
-roslib.load_manifest('stargazer')
 import rospy
 import tf
+from stargazer import StarGazer
 
 FRAME_ROBOT = '/herb_base1'
 FRAME_FIXED = '/map1'
