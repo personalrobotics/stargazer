@@ -41,11 +41,14 @@ class StarGazer(object):
         # STX: char that represents the start of a properly formed message
         self._STX = '~'
         # ETX: char that represents the end of a properly formed message
+
         self._ETX = '`'
         # DELIM: char that splits data
         self._DELIM = '|'
         # CMD: char that indicates command
         self._CMD = '#'
+        # CMD: char that indicates command
+        self._RESPONSE = '!'
 
         # RESULT: char that indicates that the message contains result data
         self._RESULT = '^'
@@ -77,16 +80,22 @@ class StarGazer(object):
         """ Disconnects from the Stargazer and closes the RS-232 port.
         """
         assert self.connection
-
+        print 'disconnect()'
         self.connection.close()
         self.connection = None
 
-    def _send_stargazer_startup(self):
-        startup = ('CalcStop',
-                   'MarkDim|HLD1L',
-                   'CalcStart')
-        for command in startup:
-            self.send_command(command)
+    def start_streaming(self):
+        self.send_command('CalcStart')
+        # TODO: Start the streaming thread.
+
+    def stop_streaming(self):
+        self.send_command('CalcStop')
+        # TODO: Stop the streaming thread.
+
+    def set_parameter(self, name, value):
+        self.send_command(name, value)
+
+        # TODO: Wait for the response.
 
     def send_command(self, *args):
         '''
@@ -103,7 +112,21 @@ class StarGazer(object):
         delimeted   = ''.join([str(i) + self._DELIM for i in args])[:-1]
         command_str = self._STX + self._CMD + delimeted + self._ETX
         rospy.loginfo('Sending command to StarGazer: %s', command_str)
-        self.connection.write(command_str)
+
+        # The StarGazer requires a 50 ms delay between each byte.
+        for ch in command_str:
+            self.connection.write(ch)
+            time.sleep(0.05)
+
+        # Wait for a response.
+        response_expected = self._STX + self._RESPONSE + delimeted + self._ETX
+        response_actual = self.connection.read(len(response_expected))
+
+        if response_actual != response_expected:
+            raise Exception(
+                'Command "{:s}" received invalid response "{:s}"; expected "{:s}".'\
+                .format(command_str, response_actual, response_expected)
+            )
 
     def _read(self):
         '''

@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-import deferred
 import rospy
 import tf
 from stargazer import StarGazer
@@ -21,6 +20,7 @@ def callback_publish(self, pose_dict):
 def get_options():
     """ Gets StarGazer options from the ROS parameter server.
     """
+    options = {}
 
     # Threshold level to reject external turbulence shown in image; depend
     # on surroundings. Recommended value is ranging from 210 to 240.
@@ -67,11 +67,12 @@ def get_options():
     assert options['MarkMode'] in ['Alone', 'Map']
 
     return options
+
 if __name__ == '__main__':
     rospy.init_node('stargazer')
 
     device = rospy.get_param('~device')
-    marker_map = rospy.get_param('~marker_map')
+    marker_map = rospy.get_param('~marker_map', '')
     parameters = get_options()
 
     args = {
@@ -82,16 +83,18 @@ if __name__ == '__main__':
 
     with StarGazer(**args) as stargazer:
         # The StarGazer might be streaming data. Turn off streaming mode.
-        stargazer.send_command('CalcStop')
+        stargazer.stop_streaming()
 
         # Set all parameters, possibly to their default values. This is the
         # safest option because the parameters can be corrupted when the
         # StarGazer is powered off.
-        for name, value in parameter.iteritems():
-            stargazer.set_parameter(key, value)
+        for name, value in parameters.iteritems():
+            stargazer.set_parameter(name, value)
 
+        import IPython; IPython.embed()
+
+    """
         # Start streaming data from the StarGazer. data 
         stargazer.start_streaming()
         rospy.spin()
-        stargazer.stop_streaming()
-
+    """
