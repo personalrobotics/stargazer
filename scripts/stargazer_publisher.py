@@ -6,11 +6,6 @@ from stargazer import StarGazer
 from geometry_msgs.msg import (Point, Quaternion, Pose, PoseArray,
                                PoseWithCovariance, PoseWithCovarianceStamped)
 
-# TODO: These should not be global.
-FRAME_STARGAZER = 'stargazer_lens'
-FRAME_ROBOT = 'herb_base'
-FRAME_FIXED = 'map'
-ALL_UNKNOWN_IDS = set()
 
 def tf_to_matrix(trans, rot):
     trans_mat = tf.transformations.translation_matrix(trans)
@@ -47,6 +42,11 @@ class StarGazerNode(object):
         }
         parameters = self.get_options()
 
+        self.fixed_frame_id = rospy.get_param('~fixed_frame_id', 'map')
+        self.robot_frame_id = rospy.get_param('~robot_frame_id', 'base_link')
+        self.stargazer_frame_id = rospy.get_param('~stargazer_frame_id', 'stargazer')
+        self.marker_frame_prefix = rospy.get_param('~marker_frame_prefix', 'stargazer/')
+
         with StarGazer(**args) as stargazer:
             # The StarGazer might be streaming data. Turn off streaming mode.
             stargazer.stop_streaming()
@@ -75,18 +75,19 @@ class StarGazerNode(object):
         # Find the transform from the Stargazer to the robot.
         try:
             Tstargazer_robot = tf_to_matrix(
-                *self.tf_listener.lookupTransform(FRAME_STARGAZER, FRAME_ROBOT, stamp)
+                *self.tf_listener.lookupTransform(
+                    self.stargazer_frame_id, self.robot_frame_id, stamp)
             )
         except tf.Exception as e:
             rospy.logwarn('Failed looking up transform from "%s" to "%s": %s.',
-                STARGAZER_FRAME, FRAME_ROBOT, str(e))
+                self.stargazer_frame_id, self.robot_frame_id, str(e))
             return
 
         # Publish the poses as ROS messages. Also publish an array of the robot
         # poses predicted from each marker. This is useful for visualization.
         pose_array_msg = PoseArray()
         pose_array_msg.header.stamp = stamp
-        pose_array_msg.header.frame_id = FRAME_FIXED
+        pose_array_msg.header.frame_id = self.fixed_frame_id
 
         for marker_id, Tmap_stargazer in pose_dict.iteritems():
             # Convert the 'map -> stargazer' transform into a 'map -> robot' pose.
@@ -97,7 +98,7 @@ class StarGazerNode(object):
             # Publish the output to a ROS message.
             pose_cov_msg = PoseWithCovarianceStamped()
             pose_cov_msg.header.stamp = stamp
-            pose_cov_msg.header.frame_id = FRAME_FIXED
+            pose_cov_msg.header.frame_id = self.fixed_frame_id
             pose_cov_msg.pose.pose = pose_msg
             # TODO: Set the covariance.
             pose_cov_msg.pose.covariance = [ 0. ] * 36
@@ -109,15 +110,13 @@ class StarGazerNode(object):
     def callback_local(self, pose_dict):
         stamp = rospy.Time.now()
 
-        # TODO: Make this a class variable.
-
         for marker_id, pose in pose_dict.iteritems():
-            frame_id = 'marker{:d}'.format(marker_id)
             cartesian = pose[0:3, 3]
             quaternion = tf.transformations.quaternion_from_matrix(pose)
 
+            frame_id = '{:s}/marker_{:d}'.format(self.marker_frame_prefix, marker_id)
             self.tf_broadcaster.sendTransform(
-                cartesian, quaternion, stamp, frame_id, FRAME_STARGAZER
+                cartesian, quaternion, stamp, frame_id, self.stargazer_frame_id
             )
 
     def get_options(self):
