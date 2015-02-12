@@ -3,10 +3,18 @@ import rospy
 import tf
 from stargazer import StarGazer
 
+# TODO: These should not be global.
 FRAME_ROBOT = '/herb_base1'
 FRAME_FIXED = '/map1'
+ALL_UNKNOWN_IDS = set()
 
-def callback_publish(self, pose_dict):
+def callback_publish(pose_dict, unknown_ids):
+    for unknown_id in unknown_ids - ALL_UNKNOWN_IDS:
+        rospy.logwarn('Detected marker ID %s that is not in the map.', unknown_id)
+        ALL_UNKNOWN_IDS.add(unknown_id)
+
+
+    """
     broadcaster = tf.TransformBroadcaster()
     for matrix in pose_dict.values():
         cartesian  = matrix[0:3,3]
@@ -16,6 +24,8 @@ def callback_publish(self, pose_dict):
                                   rospy.Time.now(),
                                   FRAME_ROBOT,
                                   FRAME_FIXED)
+    """
+    print 'callback', pose_dict
 
 def get_options():
     """ Gets StarGazer options from the ROS parameter server.
@@ -91,10 +101,9 @@ if __name__ == '__main__':
         for name, value in parameters.iteritems():
             stargazer.set_parameter(name, value)
 
-        import IPython; IPython.embed()
-
-    """
-        # Start streaming data from the StarGazer. data 
+        # Start streaming. ROS messages will be published in callbacks.
         stargazer.start_streaming()
         rospy.spin()
-    """
+
+        # Stop streaming. Try to clean up after ourselves.
+        stargazer.stop_streaming()

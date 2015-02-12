@@ -57,15 +57,13 @@ class StarGazer(object):
         self._callback_local  =  callback_local
 
         self._stopped = Event()
-        #self._thread  = Thread(target=self._read, args=()).start()
+        self._thread = None
 
     def __enter__(self):
-        print '__enter__'
         self.connect()
         return self
 
     def __exit__(self, type, value, traceback):
-        print '__exit__'
         if self.connection:
             self.disconnect()
 
@@ -73,24 +71,28 @@ class StarGazer(object):
         """ Connect to the Stargazer over the specified RS-232 port.
         """
         assert not self.connection
-        print 'connect()'
         self.connection = Serial(port=self.device, baudrate=115200, timeout=1.0)
 
     def disconnect(self):
         """ Disconnects from the Stargazer and closes the RS-232 port.
         """
         assert self.connection
-        print 'disconnect()'
         self.connection.close()
         self.connection = None
 
     def start_streaming(self):
+        assert self._thread is None
+
         self.send_command('CalcStart')
-        # TODO: Start the streaming thread.
+
+        self._thread = Thread(target=self._read, args=()).start()
 
     def stop_streaming(self):
+        if self._thread is not None:
+            self._stopped.set()
+            self._thread.join()
+
         self.send_command('CalcStop')
-        # TODO: Stop the streaming thread.
 
     def set_parameter(self, name, value):
         self.send_command(name, value)
@@ -142,9 +144,10 @@ class StarGazer(object):
             marker_count = int(message[1])
             #the rest of the message 
             raw_split = message[2:].split(self._DELIM)
-            if len(raw_split) <> (marker_count*5):
+            if len(raw_split) != (marker_count*5):
                 rospy.logerr('Message contained incorrect data length!: %s', message)
                 return
+
             pose_local = dict()
             for split in np.reshape(raw_split, (-1,5)):
                 marker_id        = int(split[0])
@@ -157,11 +160,12 @@ class StarGazer(object):
                 pose_local[marker_id] = fourdof_to_matrix(local_cartesian, local_angle)
 
             if self._callback_global:
-                global_pose = local_to_global(self.marker_map, pose_local)
-                self._callback_global(global_pose)
+                global_pose, unknown_ids = local_to_global(self.marker_map, pose_local)
+                self._callback_global(global_pose, unknown_ids)
+
             if self._callback_local:
                 self._callback_local(pose_local)
-            
+
         def process_buffer(message_buffer):
             '''
             Looks at current message_buffer string for _STX and _ETX chars
@@ -175,20 +179,28 @@ class StarGazer(object):
             # processed or garbage
             if self._ETX in message_buffer:
                 return message_buffer[message_buffer.rindex(self._ETX)+1:]
-            return message_buffer
+            else:
+                return message_buffer
+
         pattern        = '(?<=' + self._STX + ').+?' + self._ETX
         matcher        = re.compile(pattern)
         message_buffer = '' 
+
+        rospy.loginfo('Entering read loop.')
    
         while not self._stopped.is_set():
             try:
                 message_buffer += self.connection.read(self._chunk_size)
                 message_buffer  = process_buffer(message_buffer)
-            except:
-                rospy.logerr('Error processing current buffer: %s', 
-                          message_buffer, 
-                          exc_info=True)
+            except Exception as e:
+                rospy.logerr('Error processing current buffer: %s (content: "%s")', 
+                    str(e), message_buffer
+                )
                 message_buffer  = ''
+
+                break # For debugging purposes.
+
+        rospy.loginfo('Exited read loop.')
 
     def close(self):
         self._stopped.set()
@@ -200,15 +212,21 @@ def local_to_global(marker_map, local_poses):
     Transform local marker coordinates to map coordinates.
     '''
     global_poses = dict()
+    unknown_ids = set()
+
     for marker_id, pose in local_poses.iteritems():
-        if not marker_id in marker_map:
-            rospy.logwarn('Marker ID %i isn\'t in map!')
-            continue
-        marker_to_map   = marker_map[marker_id]
-        local_to_marker = np.linalg.inv(pose)
-        local_to_map    = np.dot(marker_to_map, local_to_marker)
-        global_poses[marker_id] = local_to_map    
-    return global_poses
+        # Marker IDs might be accidentally passed as integer.
+        marker_id = str(marker_id)
+
+        if marker_id in marker_map:
+            marker_to_map   = marker_map[marker_id]
+            local_to_marker = np.linalg.inv(pose)
+            local_to_map    = np.dot(marker_to_map, local_to_marker)
+            global_poses[marker_id] = local_to_map    
+        else:
+            unknown_ids.add(marker_id)
+
+    return global_poses, unknown_ids
 
 def fourdof_to_matrix(cartesian, angle):
     T        = tr.rotation_matrix(angle, [0,0,1])
