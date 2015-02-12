@@ -7,22 +7,14 @@ import re
 import yaml
 import time
 import logging
+import rospy
 import numpy as np
 from threading import Thread, Event
 
 import transformations as tr
 
-log = logging.getLogger(__name__)
-log.addHandler(logging.NullHandler())
-
-MAP_FILE = 'marker_map.yaml'
-
 class StarGazer(object):
-    def __init__(self, 
-                 device          = '/dev/ttyUSB0', 
-                 marker_map      = None,
-                 callback_global = None,
-                 callback_local  = None):
+    def __init__(self, device, marker_map, callback_global=None, callback_local=None):
         '''
         Connect to a Hagisonic Stargazer device and get poses. 
 
@@ -30,7 +22,6 @@ class StarGazer(object):
 
         marker_map:      dictionary of marker transforms, formatted:
                          {marker_id: (4,4) matrix}
-                         If not specified, defaults loaded from file. 
 
         callback_global: will be called whenever a new pose is recieved from the
                          Stargazer, will be called with (n,4,4) matrix of poses
@@ -41,7 +32,8 @@ class StarGazer(object):
                         Stargazer, with a dict: {marker_id: [xyz, angle]}
         '''
         self.device = device
-        self.marker_map = mar
+        self.marker_map = marker_map
+        self.connection = None
 
         # chunk_size: how many charecters to read from the serial bus in
         # between checking the buffer for the STX/ETX charecters
@@ -58,22 +50,19 @@ class StarGazer(object):
         # RESULT: char that indicates that the message contains result data
         self._RESULT = '^'
 
-        # the fixed locations of the markers, which will be
-        # used to back out the position of the stargazer
-        if marker_map != None: self.marker_map = marker_map
-        else:                  self.marker_map = yaml.load(open(MAP_FILE, 'rb'))
-        
         self._callback_global =  callback_global
         self._callback_local  =  callback_local
 
-        self._send_stargazer_startup()
         self._stopped = Event()
-        self._thread  = Thread(target=self._read, args=()).start()
+        #self._thread  = Thread(target=self._read, args=()).start()
 
     def __enter__(self):
+        print '__enter__'
         self.connect()
+        return self
 
     def __exit__(self, type, value, traceback):
+        print '__exit__'
         if self.connection:
             self.disconnect()
 
@@ -81,8 +70,8 @@ class StarGazer(object):
         """ Connect to the Stargazer over the specified RS-232 port.
         """
         assert not self.connection
-
-        self.connection = Serial(port=device, baudrate=115200, timeout=1.0)
+        print 'connect()'
+        self.connection = Serial(port=self.device, baudrate=115200, timeout=1.0)
 
     def disconnect(self):
         """ Disconnects from the Stargazer and closes the RS-232 port.
@@ -113,10 +102,8 @@ class StarGazer(object):
         '''
         delimeted   = ''.join([str(i) + self._DELIM for i in args])[:-1]
         command_str = self._STX + self._CMD + delimeted + self._ETX
-        log.info('Sending command to StarGazer: %s', command_str)
+        rospy.loginfo('Sending command to StarGazer: %s', command_str)
         self.connection.write(command_str)
-
-    def set_parameter(
 
     def _read(self):
         '''
@@ -133,7 +120,7 @@ class StarGazer(object):
             #the rest of the message 
             raw_split = message[2:].split(self._DELIM)
             if len(raw_split) <> (marker_count*5):
-                log.error('Message contained incorrect data length!: %s', message)
+                rospy.logerr('Message contained incorrect data length!: %s', message)
                 return
             pose_local = dict()
             for split in np.reshape(raw_split, (-1,5)):
@@ -175,7 +162,7 @@ class StarGazer(object):
                 message_buffer += self.connection.read(self._chunk_size)
                 message_buffer  = process_buffer(message_buffer)
             except:
-                log.error('Error processing current buffer: %s', 
+                rospy.logerr('Error processing current buffer: %s', 
                           message_buffer, 
                           exc_info=True)
                 message_buffer  = ''
@@ -185,9 +172,6 @@ class StarGazer(object):
         self.send_command('CalcStop')
         self.connection.close()
                 
-    def __del__(self):
-        self.close()
-
 def local_to_global(marker_map, local_poses):
     '''
     Transform local marker coordinates to map coordinates.
@@ -195,7 +179,7 @@ def local_to_global(marker_map, local_poses):
     global_poses = dict()
     for marker_id, pose in local_poses.iteritems():
         if not marker_id in marker_map:
-            log.warn('Marker ID %i isn\'t in map!')
+            rospy.logwarn('Marker ID %i isn\'t in map!')
             continue
         marker_to_map   = marker_map[marker_id]
         local_to_marker = np.linalg.inv(pose)
@@ -213,15 +197,3 @@ def _callback_dummy(data):
 
 def _callback_print(data):
     print(data)
-
-if __name__ == '__main__':
-    formatter = logging.Formatter("[%(asctime)s] %(levelname)-7s \
-(%(filename)s:%(lineno)3s) %(message)s", "%Y-%m-%d %H:%M:%S")
-    handler_stream = logging.StreamHandler()
-    handler_stream.setFormatter(formatter)
-    level = logging.DEBUG
-    handler_stream.setLevel(level)
-    log.addHandler(handler_stream)
-    log.setLevel(level)
-
-    s = StarGazer(callback_global=_callback_print)
