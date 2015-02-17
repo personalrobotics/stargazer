@@ -219,13 +219,21 @@ class StarGazer(object):
 
         def process_buffer(message_buffer):
             """
-            Looks at current message_buffer string for STX and ETX chars
+            Looks at current message_buffer string for STX and ETX chars.
+
             Proper behavior is to process string found between STX/ETX for poses
-            and remove everything in the buffer up the last observed ETX
+            and remove everything in the buffer up the last observed ETX.
+
+            Valid readings:
+                ~^148|-175.91|+98.74|+7.10|182.39`
+
+            No valid readings:
+                ~*DeadZone`
             """
             for candidate in matcher.findall(message_buffer):
                 #candidate still has _ETX char on the end from the regex
                 process_raw_pose(candidate[:-1])
+
             # nuke everything in the buffer before last _ETX as it is either 
             # processed or garbage
             if ETX in message_buffer:
@@ -233,12 +241,12 @@ class StarGazer(object):
             else:
                 return message_buffer
 
-        pattern        = '(?<=' + STX + ').+?' + ETX
-        matcher        = re.compile(pattern)
-        message_buffer = '' 
+        pattern = '(?<=' + STX + ').+?' + ETX
+        matcher = re.compile(pattern)
 
         rospy.loginfo('Entering read loop.')
-   
+
+        message_buffer = ''
         while not self._stopped.is_set() and self.connection:
             try:
                 message_buffer += self.connection.read(self._chunk_size)
