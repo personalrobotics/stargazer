@@ -157,7 +157,11 @@ class StarGazer(object):
                 # marker cartesian pose comes from stargazer in cm
                 # immediately converted to meters
                 local_cartesian       = (np.array(split[2:]).astype(float)*.01).tolist()
-                pose_local[marker_id] = fourdof_to_matrix(local_cartesian, local_angle)
+                #rospy.logerr('%d %f %f %f %f', marker_id, local_cartesian[0], local_cartesian[1], local_cartesian[2], local_angle)
+                local_cartesian[2] = -local_cartesian[2]
+                marker_to_stargazer = fourdof_to_matrix(local_cartesian, -local_angle)
+
+                pose_local[marker_id] = np.linalg.inv(marker_to_stargazer)
 
             if self._callback_global:
                 global_pose, unknown_ids = local_to_global(self.marker_map, pose_local)
