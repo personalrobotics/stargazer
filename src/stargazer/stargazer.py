@@ -231,9 +231,12 @@ def local_to_global(marker_map, local_poses):
 
     return global_poses, unknown_ids
 
-def fourdof_to_matrix(cartesian, angle):
-    T        = transformations.rotation_matrix(angle, [0,0,1])
-    T[0:3,3] = cartesian
+def fourdof_to_matrix(translation, yaw):
+    """
+    Convert from a Cartesian translation and yaw to a homogeneous transform.
+    """
+    T        = transformations.rotation_matrix(yaw, [0,0,1])
+    T[0:3,3] = translation
     return T
 
 def _callback_dummy(data): 
