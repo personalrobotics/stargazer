@@ -7,22 +7,14 @@ import re
 import yaml
 import time
 import logging
+import rospy
 import numpy as np
 from threading import Thread, Event
 
 import transformations as tr
 
-log = logging.getLogger(__name__)
-log.addHandler(logging.NullHandler())
-
-MAP_FILE = 'marker_map.yaml'
-
-class StarGazer:
-    def __init__(self, 
-                 device          = '/dev/ttyUSB0', 
-                 marker_map      = None,
-                 callback_global = None,
-                 callback_local  = None):
+class StarGazer(object):
+    def __init__(self, device, marker_map, callback_global=None, callback_local=None):
         '''
         Connect to a Hagisonic Stargazer device and get poses. 
 
@@ -30,7 +22,6 @@ class StarGazer:
 
         marker_map:      dictionary of marker transforms, formatted:
                          {marker_id: (4,4) matrix}
-                         If not specified, defaults loaded from file. 
 
         callback_global: will be called whenever a new pose is recieved from the
                          Stargazer, will be called with (n,4,4) matrix of poses
@@ -40,11 +31,9 @@ class StarGazer:
         callback_local: will be called whenever a new poses is recieved from the 
                         Stargazer, with a dict: {marker_id: [xyz, angle]}
         '''
-
-        # connect to device with pyserial, baudrate is from hagisonic manual
-        self.connection = Serial(port     = device, 
-                                 baudrate = 115200,
-                                 timeout  = 1.0)
+        self.device = device
+        self.marker_map = marker_map
+        self.connection = None
 
         # chunk_size: how many charecters to read from the serial bus in
         # between checking the buffer for the STX/ETX charecters
@@ -52,33 +41,63 @@ class StarGazer:
         # STX: char that represents the start of a properly formed message
         self._STX = '~'
         # ETX: char that represents the end of a properly formed message
+
         self._ETX = '`'
         # DELIM: char that splits data
         self._DELIM = '|'
         # CMD: char that indicates command
         self._CMD = '#'
+        # CMD: char that indicates command
+        self._RESPONSE = '!'
 
         # RESULT: char that indicates that the message contains result data
         self._RESULT = '^'
 
-        # the fixed locations of the markers, which will be
-        # used to back out the position of the stargazer
-        if marker_map != None: self.marker_map = marker_map
-        else:                  self.marker_map = yaml.load(open(MAP_FILE, 'rb'))
-        
         self._callback_global =  callback_global
         self._callback_local  =  callback_local
 
-        self._send_stargazer_startup()
         self._stopped = Event()
-        self._thread  = Thread(target=self._read, args=()).start()
+        self._thread = None
 
-    def _send_stargazer_startup(self):
-        startup = ('CalcStop',
-                   'MarkDim|HLD1L',
-                   'CalcStart')
-        for command in startup:
-            self.send_command(command)
+    def __enter__(self):
+        self.connect()
+        return self
+
+    def __exit__(self, type, value, traceback):
+        if self.connection:
+            self.disconnect()
+
+    def connect(self):
+        """ Connect to the Stargazer over the specified RS-232 port.
+        """
+        assert not self.connection
+        self.connection = Serial(port=self.device, baudrate=115200, timeout=1.0)
+
+    def disconnect(self):
+        """ Disconnects from the Stargazer and closes the RS-232 port.
+        """
+        assert self.connection
+        self.connection.close()
+        self.connection = None
+
+    def start_streaming(self):
+        assert self._thread is None
+
+        self.send_command('CalcStart')
+
+        self._thread = Thread(target=self._read, args=()).start()
+
+    def stop_streaming(self):
+        if self._thread is not None:
+            self._stopped.set()
+            self._thread.join()
+
+        self.send_command('CalcStop')
+
+    def set_parameter(self, name, value):
+        self.send_command(name, value)
+
+        # TODO: Wait for the response.
 
     def send_command(self, *args):
         '''
@@ -92,11 +111,24 @@ class StarGazer:
                  example: send_command('CalcStop')
                           send_command('MarkType', 'HLD1L')
         '''
-        time.sleep(1)
         delimeted   = ''.join([str(i) + self._DELIM for i in args])[:-1]
         command_str = self._STX + self._CMD + delimeted + self._ETX
-        log.info('Sending command to StarGazer: %s', command_str)
-        self.connection.write(command_str)
+        rospy.loginfo('Sending command to StarGazer: %s', command_str)
+
+        # The StarGazer requires a 50 ms delay between each byte.
+        for ch in command_str:
+            self.connection.write(ch)
+            time.sleep(0.05)
+
+        # Wait for a response.
+        response_expected = self._STX + self._RESPONSE + delimeted + self._ETX
+        response_actual = self.connection.read(len(response_expected))
+
+        if response_actual != response_expected:
+            raise Exception(
+                'Command "{:s}" received invalid response "{:s}"; expected "{:s}".'\
+                .format(command_str, response_actual, response_expected)
+            )
 
     def _read(self):
         '''
@@ -112,9 +144,10 @@ class StarGazer:
             marker_count = int(message[1])
             #the rest of the message 
             raw_split = message[2:].split(self._DELIM)
-            if len(raw_split) <> (marker_count*5):
-                log.error('Message contained incorrect data length!: %s', message)
+            if len(raw_split) != (marker_count*5):
+                rospy.logerr('Message contained incorrect data length!: %s', message)
                 return
+
             pose_local = dict()
             for split in np.reshape(raw_split, (-1,5)):
                 marker_id        = int(split[0])
@@ -124,14 +157,19 @@ class StarGazer:
                 # marker cartesian pose comes from stargazer in cm
                 # immediately converted to meters
                 local_cartesian       = (np.array(split[2:]).astype(float)*.01).tolist()
-                pose_local[marker_id] = fourdof_to_matrix(local_cartesian, local_angle)
+                #rospy.logerr('%d %f %f %f %f', marker_id, local_cartesian[0], local_cartesian[1], local_cartesian[2], local_angle)
+                local_cartesian[2] = -local_cartesian[2]
+                marker_to_stargazer = fourdof_to_matrix(local_cartesian, -local_angle)
+
+                pose_local[marker_id] = np.linalg.inv(marker_to_stargazer)
 
             if self._callback_global:
-                global_pose = local_to_global(self.marker_map, pose_local)
-                self._callback_global(global_pose)
+                global_pose, unknown_ids = local_to_global(self.marker_map, pose_local)
+                self._callback_global(global_pose, unknown_ids)
+
             if self._callback_local:
                 self._callback_local(pose_local)
-            
+
         def process_buffer(message_buffer):
             '''
             Looks at current message_buffer string for _STX and _ETX chars
@@ -145,43 +183,54 @@ class StarGazer:
             # processed or garbage
             if self._ETX in message_buffer:
                 return message_buffer[message_buffer.rindex(self._ETX)+1:]
-            return message_buffer
+            else:
+                return message_buffer
+
         pattern        = '(?<=' + self._STX + ').+?' + self._ETX
         matcher        = re.compile(pattern)
         message_buffer = '' 
+
+        rospy.loginfo('Entering read loop.')
    
         while not self._stopped.is_set():
             try:
                 message_buffer += self.connection.read(self._chunk_size)
                 message_buffer  = process_buffer(message_buffer)
-            except:
-                log.error('Error processing current buffer: %s', 
-                          message_buffer, 
-                          exc_info=True)
+            except Exception as e:
+                rospy.logerr('Error processing current buffer: %s (content: "%s")', 
+                    str(e), message_buffer
+                )
                 message_buffer  = ''
+
+                break # For debugging purposes.
+
+        rospy.loginfo('Exited read loop.')
 
     def close(self):
         self._stopped.set()
         self.send_command('CalcStop')
         self.connection.close()
                 
-    def __del__(self):
-        self.close()
-
 def local_to_global(marker_map, local_poses):
     '''
     Transform local marker coordinates to map coordinates.
     '''
     global_poses = dict()
+    unknown_ids = set()
+
     for marker_id, pose in local_poses.iteritems():
-        if not marker_id in marker_map:
-            log.warn('Marker ID %i isn\'t in map!')
-            continue
-        marker_to_map   = marker_map[marker_id]
-        local_to_marker = np.linalg.inv(pose)
-        local_to_map    = np.dot(marker_to_map, local_to_marker)
-        global_poses[marker_id] = local_to_map    
-    return global_poses
+        # Marker IDs might be accidentally passed as integer.
+        marker_id = str(marker_id)
+
+        if marker_id in marker_map:
+            marker_to_map   = marker_map[marker_id]
+            local_to_marker = np.linalg.inv(pose)
+            local_to_map    = np.dot(marker_to_map, local_to_marker)
+            global_poses[marker_id] = local_to_map    
+        else:
+            unknown_ids.add(marker_id)
+
+    return global_poses, unknown_ids
 
 def fourdof_to_matrix(cartesian, angle):
     T        = tr.rotation_matrix(angle, [0,0,1])
@@ -193,15 +242,3 @@ def _callback_dummy(data):
 
 def _callback_print(data):
     print(data)
-
-if __name__ == '__main__':
-    formatter = logging.Formatter("[%(asctime)s] %(levelname)-7s \
-(%(filename)s:%(lineno)3s) %(message)s", "%Y-%m-%d %H:%M:%S")
-    handler_stream = logging.StreamHandler()
-    handler_stream.setFormatter(formatter)
-    level = logging.DEBUG
-    handler_stream.setLevel(level)
-    log.addHandler(handler_stream)
-    log.setLevel(level)
-
-    s = StarGazer(callback_global=_callback_print)

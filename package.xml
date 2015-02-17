@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>stargazer</name>
+  <version>0.0.0</version>
+  <description>
+    Publish data from Hagisonic Stargazer, with no filtering.
+  </description>
+  <url type="repository">https://github.com/personalrobotics/stargazer.git</url>
+  <maintainer email="mdawsonh@cs.cmu.edu">Michael Dawson-Haggerty</maintainer>
+  <license>BSD</license>
+  <buildtool_depend>catkin</buildtool_depend>
+  <exec_depend>rospy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>tf</exec_depend>
+</package>
