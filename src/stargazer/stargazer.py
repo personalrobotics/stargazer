@@ -84,9 +84,6 @@ class StarGazer(object):
         """
         Disconnects from the StarGazer and closes the RS-232 port.
         """
-        if self.is_streaming:
-            self.stop_streaming()
-
         if self.is_connected:
             self.connection.close()
             self.connection = None
@@ -114,7 +111,7 @@ class StarGazer(object):
         if self.is_streaming:
             self._stopped.set()
             self._thread.join()
-            self._send_command('CalcStop')
+        self._send_command('CalcStop')
 
     def set_parameter(self, name, value):
         """
@@ -132,7 +129,7 @@ class StarGazer(object):
         -------
             set_parameter('MarkType', 'HLD1L')
         """
-        assert not self.is_streaming
+        assert self.is_connected and not self.is_streaming
         self._send_command(name, value)
 
     def _send_command(self, *args):
