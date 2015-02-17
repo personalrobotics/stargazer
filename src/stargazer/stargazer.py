@@ -110,7 +110,7 @@ class StarGazer(object):
                  example: send_command('CalcStop')
                           send_command('MarkType', 'HLD1L')
         """
-        delimited   = ''.join([str(i) + DELIM for i in args])[:-1]
+        delimited   = DELIM.join(str(i) for i in args)
         command_str = STX + CMD + delimited + ETX
         rospy.loginfo('Sending command to StarGazer: %s', command_str)
 
