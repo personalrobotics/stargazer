@@ -24,7 +24,8 @@ CMD = '#'
 RESPONSE = '!'
 # RESULT: char that indicates that the message contains result data
 RESULT = '^'
-
+# NOTIFY: char that indicates a notification message of some kind
+NOTIFY = '*'
 
 class StarGazer(object):
     def __init__(self, device, marker_map, callback_global=None, callback_local=None):
@@ -182,40 +183,23 @@ class StarGazer(object):
         Read from the serial connection to the StarGazer, process buffer,
         then execute callbacks. 
         """
-        def process_raw_pose(message):
-            """
-            Turn a raw message into floating point arrays, and then
-            execute callbacks with the new data
-            """
-            # the first character of the message is the number of markers observed
-            marker_count = int(message[1])
-            #the rest of the message 
-            raw_split = message[2:].split(DELIM)
-            if len(raw_split) != (marker_count*5):
-                rospy.logerr('Message contained incorrect data length!: %s', message)
-                return
+        # Compute a regular expression that returns the last valid
+        # message in a StarGazer stream.
+        msg_pattern = ('.*' + STX + '(?P<type>.)(?P<payload>.+)' + ETX +
+                       '(?P<remainder>.*)$')
+        msg_matcher = re.compile(msg_pattern)
 
-            pose_local = dict()
-            for split in np.reshape(raw_split, (-1,5)):
-                marker_id        = int(split[0])
-                # marker angle comes from stargazer in degrees
-                # immediately converted to radians
-                local_angle     = np.radians(float(split[1]))
-                # marker Cartesian pose comes from stargazer in cm
-                # immediately converted to meters
-                local_cartesian       = (np.array(split[2:]).astype(float)*.01).tolist()
-                #rospy.logerr('%d %f %f %f %f', marker_id, local_cartesian[0], local_cartesian[1], local_cartesian[2], local_angle)
-                local_cartesian[2] = -local_cartesian[2]
-                marker_to_stargazer = fourdof_to_matrix(local_cartesian, -local_angle)
+        # Compute a regular expression that converts a StarGazer message
+        # into a list of tuples containing parsed groups.
+        delimiter = '\\' + DELIM
+        number = '[\d\+\-\.]'
+        tag_pattern = (r'(?P<id>\d+)' + delimiter +
+                       r'(?P<yaw>' + number + '+)' + delimiter +
+                       r'(?P<x>' + number + '+)' + delimiter +
+                       r'(?P<y>' + number + '+)' + delimiter +
+                       r'(?P<z>' + number + '+)')
+        tag_matcher = re.compile(tag_pattern)
 
-                pose_local[marker_id] = np.linalg.inv(marker_to_stargazer)
-
-            if self._callback_global:
-                global_pose, unknown_ids = local_to_global(self.marker_map, pose_local)
-                self._callback_global(global_pose, unknown_ids)
-
-            if self._callback_local:
-                self._callback_local(pose_local)
 
         def process_buffer(message_buffer):
             """
@@ -226,23 +210,49 @@ class StarGazer(object):
 
             Valid readings:
                 ~^148|-175.91|+98.74|+7.10|182.39`
+                ~^248|-176.67|+98.38|+8.39|181.91|370|-178.41|-37.05|+8.97|179.51`
 
             No valid readings:
                 ~*DeadZone`
             """
-            for candidate in matcher.findall(message_buffer):
-                #candidate still has _ETX char on the end from the regex
-                process_raw_pose(candidate[:-1])
-
-            # nuke everything in the buffer before last _ETX as it is either 
-            # processed or garbage
-            if ETX in message_buffer:
-                return message_buffer[message_buffer.rindex(ETX)+1:]
-            else:
+            # Look for a matching message, return the buffer if none are found.
+            message = msg_matcher.match(message_buffer)
+            if not message:
                 return message_buffer
 
-        pattern = '(?<=' + STX + ').+?' + ETX
-        matcher = re.compile(pattern)
+            if message.group('type') == RESULT:
+                markers = tag_matcher.finditer(message.group('payload'))
+
+                local_poses = {}
+                for marker in markers:
+                    # Parse pose information for this marker.
+                    _id = marker.group('id')
+                    yaw = -np.radians(float(marker.group('yaw')))
+                    x = 0.01 * float(marker.group('x'))
+                    y = 0.01 * float(marker.group('y'))
+                    # Note: this axis is negated.
+                    z = -0.01 * float(marker.group('z'))
+
+                    # Convert the pose to a transform and store it by ID.
+                    marker_to_stargazer = fourdof_to_matrix((x, y, z), yaw)
+                    local_poses[_id] = np.linalg.inv(marker_to_stargazer)
+
+                if self._callback_local:
+                    self._callback_local(local_poses)
+
+                if self._callback_global:
+                    global_poses, unknown_ids = local_to_global(self.marker_map,
+                                                                local_poses)
+                    self._callback_global(global_poses, unknown_ids)
+
+            elif message.group('type') == NOTIFY:
+                # TODO: Report deadzone messages in here!
+                pass
+            else:
+                pass
+
+            # Return the rest of the message buffer.
+            return message.group('remainder')
 
         rospy.loginfo('Entering read loop.')
 
@@ -273,17 +283,14 @@ def local_to_global(marker_map, local_poses):
     global_poses = dict()
     unknown_ids = set()
 
-    for marker_id, pose in local_poses.iteritems():
-        # Marker IDs might be accidentally passed as integer.
-        marker_id = str(marker_id)
-
-        if marker_id in marker_map:
-            marker_to_map   = marker_map[marker_id]
+    for _id, pose in local_poses.iteritems():
+        if _id in marker_map:
+            marker_to_map   = marker_map[_id]
             local_to_marker = np.linalg.inv(pose)
             local_to_map    = np.dot(marker_to_map, local_to_marker)
-            global_poses[marker_id] = local_to_map    
+            global_poses[_id] = local_to_map
         else:
-            unknown_ids.add(marker_id)
+            unknown_ids.add(_id)
 
     return global_poses, unknown_ids
 
