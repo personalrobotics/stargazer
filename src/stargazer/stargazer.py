@@ -1,6 +1,6 @@
-'''
-Driver class for Hagisonic Stargazer, with no ROS dependancies. 
-'''
+"""
+Driver class for Hagisonic Stargazer, with no ROS dependencies. 
+"""
 from serial import Serial
 from collections import deque
 import re
@@ -10,12 +10,12 @@ import logging
 import rospy
 import numpy as np
 from threading import Thread, Event
+from tf import transformations
 
-import transformations as tr
 
 class StarGazer(object):
     def __init__(self, device, marker_map, callback_global=None, callback_local=None):
-        '''
+        """
         Connect to a Hagisonic Stargazer device and get poses. 
 
         device:          The device location for the serial connection. 
@@ -23,20 +23,20 @@ class StarGazer(object):
         marker_map:      dictionary of marker transforms, formatted:
                          {marker_id: (4,4) matrix}
 
-        callback_global: will be called whenever a new pose is recieved from the
+        callback_global: will be called whenever a new pose is received from the
                          Stargazer, will be called with (n,4,4) matrix of poses
                          of the location of the Stargazer in the global frame.
                          These are computed from marker_map. 
 
-        callback_local: will be called whenever a new poses is recieved from the 
+        callback_local: will be called whenever a new poses is received from the 
                         Stargazer, with a dict: {marker_id: [xyz, angle]}
-        '''
+        """
         self.device = device
         self.marker_map = marker_map
         self.connection = None
 
-        # chunk_size: how many charecters to read from the serial bus in
-        # between checking the buffer for the STX/ETX charecters
+        # chunk_size: how many characters to read from the serial bus in
+        # between checking the buffer for the STX/ETX characters
         self._chunk_size = 80
         # STX: char that represents the start of a properly formed message
         self._STX = '~'
@@ -100,19 +100,19 @@ class StarGazer(object):
         # TODO: Wait for the response.
 
     def send_command(self, *args):
-        '''
+        """
         Send a command to the stargazer. 
 
         Arguments
         ---------
         command: string, or list. If string of single command, send just that.
-                 if list, reformat to add delimeter charecter 
+                 if list, reformat to add delimiter character 
 
                  example: send_command('CalcStop')
                           send_command('MarkType', 'HLD1L')
-        '''
-        delimeted   = ''.join([str(i) + self._DELIM for i in args])[:-1]
-        command_str = self._STX + self._CMD + delimeted + self._ETX
+        """
+        delimited   = ''.join([str(i) + self._DELIM for i in args])[:-1]
+        command_str = self._STX + self._CMD + delimited + self._ETX
         rospy.loginfo('Sending command to StarGazer: %s', command_str)
 
         # The StarGazer requires a 50 ms delay between each byte.
@@ -121,7 +121,7 @@ class StarGazer(object):
             time.sleep(0.05)
 
         # Wait for a response.
-        response_expected = self._STX + self._RESPONSE + delimeted + self._ETX
+        response_expected = self._STX + self._RESPONSE + delimited + self._ETX
         response_actual = self.connection.read(len(response_expected))
 
         if response_actual != response_expected:
@@ -131,16 +131,16 @@ class StarGazer(object):
             )
 
     def _read(self):
-        '''
+        """
         Read from the serial connection to the stargazer, process buffer,
         then execute callbacks. 
-        '''
+        """
         def process_raw_pose(message):
-            '''
+            """
             Turn a raw message into floating point arrays, and then
             execute callbacks with the new data
-            '''
-            # the first charecter of the message is the number of markers observed
+            """
+            # the first character of the message is the number of markers observed
             marker_count = int(message[1])
             #the rest of the message 
             raw_split = message[2:].split(self._DELIM)
@@ -154,7 +154,7 @@ class StarGazer(object):
                 # marker angle comes from stargazer in degrees
                 # immediately converted to radians
                 local_angle     = np.radians(float(split[1]))
-                # marker cartesian pose comes from stargazer in cm
+                # marker Cartesian pose comes from stargazer in cm
                 # immediately converted to meters
                 local_cartesian       = (np.array(split[2:]).astype(float)*.01).tolist()
                 #rospy.logerr('%d %f %f %f %f', marker_id, local_cartesian[0], local_cartesian[1], local_cartesian[2], local_angle)
@@ -171,11 +171,11 @@ class StarGazer(object):
                 self._callback_local(pose_local)
 
         def process_buffer(message_buffer):
-            '''
+            """
             Looks at current message_buffer string for _STX and _ETX chars
             Proper behavior is to process string found between STX/ETX for poses
             and remove everything in the buffer up the last observed ETX
-            '''
+            """
             for candidate in matcher.findall(message_buffer):
                 #candidate still has _ETX char on the end from the regex
                 process_raw_pose(candidate[:-1])
@@ -212,9 +212,9 @@ class StarGazer(object):
         self.connection.close()
                 
 def local_to_global(marker_map, local_poses):
-    '''
+    """
     Transform local marker coordinates to map coordinates.
-    '''
+    """
     global_poses = dict()
     unknown_ids = set()
 
@@ -233,7 +233,7 @@ def local_to_global(marker_map, local_poses):
     return global_poses, unknown_ids
 
 def fourdof_to_matrix(cartesian, angle):
-    T        = tr.rotation_matrix(angle, [0,0,1])
+    T        = transformations.rotation_matrix(angle, [0,0,1])
     T[0:3,3] = cartesian
     return T
 
