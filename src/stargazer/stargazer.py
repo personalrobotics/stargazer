@@ -12,11 +12,24 @@ import numpy as np
 from threading import Thread, Event
 from tf import transformations
 
+# STX: char that represents the start of a properly formed message
+STX = '~'
+# ETX: char that represents the end of a properly formed message
+ETX = '`'
+# DELIM: char that splits data
+DELIM = '|'
+# CMD: char that indicates command
+CMD = '#'
+# CMD: char that indicates command
+RESPONSE = '!'
+# RESULT: char that indicates that the message contains result data
+RESULT = '^'
+
 
 class StarGazer(object):
     def __init__(self, device, marker_map, callback_global=None, callback_local=None):
         """
-        Connect to a Hagisonic Stargazer device and get poses. 
+        Connect to a Hagisonic Stargazer device and receive poses. 
 
         device:          The device location for the serial connection. 
 
@@ -38,20 +51,6 @@ class StarGazer(object):
         # chunk_size: how many characters to read from the serial bus in
         # between checking the buffer for the STX/ETX characters
         self._chunk_size = 80
-        # STX: char that represents the start of a properly formed message
-        self._STX = '~'
-        # ETX: char that represents the end of a properly formed message
-
-        self._ETX = '`'
-        # DELIM: char that splits data
-        self._DELIM = '|'
-        # CMD: char that indicates command
-        self._CMD = '#'
-        # CMD: char that indicates command
-        self._RESPONSE = '!'
-
-        # RESULT: char that indicates that the message contains result data
-        self._RESULT = '^'
 
         self._callback_global =  callback_global
         self._callback_local  =  callback_local
@@ -111,8 +110,8 @@ class StarGazer(object):
                  example: send_command('CalcStop')
                           send_command('MarkType', 'HLD1L')
         """
-        delimited   = ''.join([str(i) + self._DELIM for i in args])[:-1]
-        command_str = self._STX + self._CMD + delimited + self._ETX
+        delimited   = ''.join([str(i) + DELIM for i in args])[:-1]
+        command_str = STX + CMD + delimited + ETX
         rospy.loginfo('Sending command to StarGazer: %s', command_str)
 
         # The StarGazer requires a 50 ms delay between each byte.
@@ -121,7 +120,7 @@ class StarGazer(object):
             time.sleep(0.05)
 
         # Wait for a response.
-        response_expected = self._STX + self._RESPONSE + delimited + self._ETX
+        response_expected = STX + RESPONSE + delimited + ETX
         response_actual = self.connection.read(len(response_expected))
 
         if response_actual != response_expected:
@@ -143,7 +142,7 @@ class StarGazer(object):
             # the first character of the message is the number of markers observed
             marker_count = int(message[1])
             #the rest of the message 
-            raw_split = message[2:].split(self._DELIM)
+            raw_split = message[2:].split(DELIM)
             if len(raw_split) != (marker_count*5):
                 rospy.logerr('Message contained incorrect data length!: %s', message)
                 return
@@ -181,12 +180,12 @@ class StarGazer(object):
                 process_raw_pose(candidate[:-1])
             # nuke everything in the buffer before last _ETX as it is either 
             # processed or garbage
-            if self._ETX in message_buffer:
-                return message_buffer[message_buffer.rindex(self._ETX)+1:]
+            if ETX in message_buffer:
+                return message_buffer[message_buffer.rindex(ETX)+1:]
             else:
                 return message_buffer
 
-        pattern        = '(?<=' + self._STX + ').+?' + self._ETX
+        pattern        = '(?<=' + STX + ').+?' + ETX
         matcher        = re.compile(pattern)
         message_buffer = '' 
 
