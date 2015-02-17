@@ -145,7 +145,7 @@ class StarGazerNode(object):
             cartesian = pose[0:3, 3]
             quaternion = tf.transformations.quaternion_from_matrix(pose)
 
-            frame_id = '{:s}{:d}'.format(self.marker_frame_prefix, marker_id)
+            frame_id = '{:s}{:s}'.format(self.marker_frame_prefix, marker_id)
             self.tf_broadcaster.sendTransform(
                 cartesian, quaternion, stamp, frame_id, self.stargazer_frame_id
             )
