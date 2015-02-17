@@ -29,7 +29,7 @@ RESULT = '^'
 class StarGazer(object):
     def __init__(self, device, marker_map, callback_global=None, callback_local=None):
         """
-        Connect to a Hagisonic Stargazer device and receive poses. 
+        Connect to a Hagisonic StarGazer device and receive poses.
 
         device:          The device location for the serial connection. 
 
@@ -63,52 +63,91 @@ class StarGazer(object):
         return self
 
     def __exit__(self, type, value, traceback):
-        if self.connection:
+        if self.is_connected:
             self.disconnect()
 
-    def connect(self):
-        """ Connect to the Stargazer over the specified RS-232 port.
+    @property
+    def is_connected(self):
         """
-        assert not self.connection
+        Returns whether the driver is currently connected to a serial port.
+        """
+        return self.connection is not None
+
+    def connect(self):
+        """
+        Connect to the StarGazer over the specified RS-232 port.
+        """
+        assert not self.is_connected
         self.connection = Serial(port=self.device, baudrate=115200, timeout=1.0)
 
     def disconnect(self):
-        """ Disconnects from the Stargazer and closes the RS-232 port.
         """
-        assert self.connection
-        self.connection.close()
-        self.connection = None
+        Disconnects from the StarGazer and closes the RS-232 port.
+        """
+        if self.is_streaming:
+            self.stop_streaming()
+
+        if self.is_connected:
+            self.connection.close()
+            self.connection = None
+
+    @property
+    def is_streaming(self):
+        """
+        Returns whether the driver is currently streaming pose data. 
+        """
+        return self._thread is not None
 
     def start_streaming(self):
-        assert self._thread is None
-
-        self.send_command('CalcStart')
-
+        """
+        Begin streaming pose data from the StarGazer.
+        """
+        assert self.is_connected and not self.is_streaming
+        self._send_command('CalcStart')
         self._thread = Thread(target=self._read, args=()).start()
 
     def stop_streaming(self):
-        if self._thread is not None:
+        """
+        Stop streaming pose data from the StarGazer.
+        """
+        assert self.is_connected
+        if self.is_streaming:
             self._stopped.set()
             self._thread.join()
-
-        self.send_command('CalcStop')
+            self._send_command('CalcStop')
 
     def set_parameter(self, name, value):
-        self.send_command(name, value)
-
-        # TODO: Wait for the response.
-
-    def send_command(self, *args):
         """
-        Send a command to the stargazer. 
+        Set a StarGazer configuration parameter.
+
+        This function can only be called while the StarGazer is
+        connected, but not streaming.
+
+        Arguments
+        ---------
+        name:  string name of the parameter to set
+        value: string value of the parameter to set
+
+        Example
+        -------
+            set_parameter('MarkType', 'HLD1L')
+        """
+        assert not self.is_streaming
+        self._send_command(name, value)
+
+    def _send_command(self, *args):
+        """
+        Send a command to the StarGazer.
 
         Arguments
         ---------
         command: string, or list. If string of single command, send just that.
                  if list, reformat to add delimiter character 
 
-                 example: send_command('CalcStop')
-                          send_command('MarkType', 'HLD1L')
+        Example
+        -------
+            _send_command('CalcStop')
+            _send_command('MarkType', 'HLD1L')
         """
         delimited   = DELIM.join(str(i) for i in args)
         command_str = STX + CMD + delimited + ETX
@@ -122,16 +161,28 @@ class StarGazer(object):
         # Wait for a response.
         response_expected = STX + RESPONSE + delimited + ETX
         response_actual = self.connection.read(len(response_expected))
+        
+        # Scan for more incoming characters until we get a read timeout.
+        # (This is useful if there is still some incoming data from previous
+        # commands in intermediate serial buffers.)
+        while response_actual[-len(response_expected):] != response_expected:
+            c = self.connection.read()
 
-        if response_actual != response_expected:
-            raise Exception(
-                'Command "{:s}" received invalid response "{:s}"; expected "{:s}".'\
-                .format(command_str, response_actual, response_expected)
-            )
+            if c:
+                # Add new characters to the response string.
+                response_actual += c
+            else:
+                # If we run out of characters and still don't match, report
+                # the invalid response as an exception.
+                raise Exception(
+                    'Command "{:s}" received invalid response "{:s}"; '
+                    'expected "{:s}".'
+                    .format(command_str, response_actual, response_expected)
+                )
 
     def _read(self):
         """
-        Read from the serial connection to the stargazer, process buffer,
+        Read from the serial connection to the StarGazer, process buffer,
         then execute callbacks. 
         """
         def process_raw_pose(message):
@@ -171,7 +222,7 @@ class StarGazer(object):
 
         def process_buffer(message_buffer):
             """
-            Looks at current message_buffer string for _STX and _ETX chars
+            Looks at current message_buffer string for STX and ETX chars
             Proper behavior is to process string found between STX/ETX for poses
             and remove everything in the buffer up the last observed ETX
             """
@@ -191,7 +242,7 @@ class StarGazer(object):
 
         rospy.loginfo('Entering read loop.')
    
-        while not self._stopped.is_set():
+        while not self._stopped.is_set() and self.connection:
             try:
                 message_buffer += self.connection.read(self._chunk_size)
                 message_buffer  = process_buffer(message_buffer)
@@ -207,7 +258,7 @@ class StarGazer(object):
 
     def close(self):
         self._stopped.set()
-        self.send_command('CalcStop')
+        self._send_command('CalcStop')
         self.connection.close()
                 
 def local_to_global(marker_map, local_poses):
