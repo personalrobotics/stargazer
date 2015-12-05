@@ -106,6 +106,8 @@ class StarGazerNode(object):
 
         # Find the transform from the Stargazer to the robot.
         try:
+            self.tf_listener.waitForTransform(self.stargazer_frame_id, self.robot_frame_id, stamp,
+                                              timeout=rospy.Duration.from_sec(1))
             Tstargazer_robot = tf_to_matrix(
                 *self.tf_listener.lookupTransform(
                     self.stargazer_frame_id, self.robot_frame_id, stamp)
